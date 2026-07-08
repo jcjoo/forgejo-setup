@@ -3,13 +3,15 @@
 
 runner:
   # Labels re-declarados a cada start — trocam os do registro sem re-registrar.
-  # pso-ci-node:22 (build em ./ci-image): node + docker CLI/buildx e /var/run
-  # real, contornando o "path escapes from parent" do Docker 29+.
+  # ghcr.io/jcjoo/pso-forgejo-runner: a mesma imagem do runner (runner-image/
+  # Dockerfile) também serve de imagem de job — já tem node + docker CLI/
+  # buildx e /var/run real, contornando o "path escapes from parent" do
+  # Docker 29+.
   labels:
-    - docker:docker://pso-ci-node:22
-    - ubuntu-latest:docker://pso-ci-node:22
-    - ubuntu-22.04:docker://pso-ci-node:22
-    - ubuntu-24.04:docker://pso-ci-node:22
+    - docker:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest
+    - ubuntu-latest:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest
+    - ubuntu-22.04:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest
+    - ubuntu-24.04:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest
 
 container:
   # Jobs na rede do host: com a instância registrada como localhost:3300,

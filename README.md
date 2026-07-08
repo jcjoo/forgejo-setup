@@ -41,7 +41,7 @@ stack no Portainer. Só precisa do token de registro no `.env` antes:
 ```bash
 docker compose up -d forgejo database   # se ainda não estiver no ar
 ./setup-runner.sh                       # gera o token e grava em RUNNER_REGISTRATION_TOKEN no .env
-docker compose up -d                    # builda a ci-image, registra e sobe o runner
+docker compose up -d                    # baixa a imagem do runner, registra e sobe
 ```
 
 (No Portainer: gere o token com o comando dentro de `setup-runner.sh` — ou
