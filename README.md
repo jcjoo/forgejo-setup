@@ -51,6 +51,28 @@ registry embutido:
     password: ${{ secrets.REGISTRY_TOKEN }}   # token com escopo write:package
 ```
 
+### Configurar secrets (ex.: `REGISTRY_TOKEN`)
+
+`secrets.*` no workflow **não** são variáveis de ambiente da máquina — são
+cadastradas no próprio Forgejo, criptografadas, e só ficam visíveis para os
+jobs de Actions:
+
+1. Gere o valor do token: Configurações do usuário → Aplicações → Gerar
+   token, escopo `write:package` (é um token pessoal, igual ao de admin
+   usado no `migrate-github.sh`, só que com escopo diferente).
+2. Cadastre o secret:
+   - **Por organização** (visível a todos os repos de `pso` — recomendado
+     pro `REGISTRY_TOKEN`): `pso` → Configurações → Actions → Secrets →
+     Adicionar Secret → nome `REGISTRY_TOKEN`, valor = token do passo 1.
+   - **Por repositório** (se for algo específico de um único repo):
+     Repositório → Configurações → Actions → Secrets → mesmo fluxo.
+3. O workflow referencia pelo nome (`${{ secrets.REGISTRY_TOKEN }}`) — não
+   precisa reiniciar runner nem tocar em `.env` no servidor.
+
+Isso vale para qualquer outro secret que os workflows precisem (ex.: token
+de deploy, API key de terceiro): mesmo caminho, só troca o nome e o escopo
+do token gerado.
+
 ## Registry de containers
 
 ```bash
