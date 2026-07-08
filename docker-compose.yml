@@ -1,0 +1,82 @@
+# Forgejo self-hosted para a PSO — forge (git + issues/PRs + registry de
+# containers) + Postgres + runner de CI (Forgejo Actions).
+# Teste local: http://localhost:3300 · ssh na 2222 · registry no mesmo 3300.
+name: pso-forgejo
+
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:13
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      # Config via env (FORGEJO__seção__CHAVE) — sem editar app.ini na mão.
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: database:5432
+      FORGEJO__database__NAME: ${POSTGRES_DB:-forgejo}
+      FORGEJO__database__USER: ${POSTGRES_USER:-forgejo}
+      FORGEJO__database__PASSWD: ${POSTGRES_PASSWORD:-forgejo}
+      # URLs públicas (em produção troque pelo domínio/IP do servidor).
+      FORGEJO__server__ROOT_URL: ${FORGEJO_ROOT_URL:-http://localhost:3300/}
+      FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_PORT:-2222}
+      FORGEJO__server__SSH_LISTEN_PORT: "22"
+      # CI (Forgejo Actions) — mesma sintaxe do GitHub Actions.
+      FORGEJO__actions__ENABLED: "true"
+      # Fechado para a empresa: sem cadastro público.
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      # Espelhos push (backup off-site no GitHub) habilitados.
+      FORGEJO__mirror__ENABLED: "true"
+    ports:
+      - "${FORGEJO_HTTP_PORT:-3300}:3000"
+      - "${FORGEJO_SSH_PORT:-2222}:22"
+    volumes:
+      - forgejo_data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forgejo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forgejo}
+      POSTGRES_DB: ${POSTGRES_DB:-forgejo}
+    volumes:
+      - forgejo_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runner de CI: registre primeiro com ./setup-runner.sh (gera o token e a
+  # config). Sobe junto nas próximas vezes: docker compose up -d runner
+  runner:
+    image: code.forgejo.org/forgejo/runner:12
+    restart: unless-stopped
+    depends_on:
+      - forgejo
+    # Rede do host: o runner (e os jobs, via runner-config.yml) falam com o
+    # Forgejo pelo mesmo localhost:3300 que o daemon docker usa no push das
+    # imagens — registre a instância como http://localhost:3300.
+    network_mode: host
+    user: "0:0"
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - runner_data:/data
+      - ./runner-config.yml:/data/config.yml:ro
+      # Jobs em container usam o docker do host (mesmo padrão de runner do GitHub).
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /data
+    command: forgejo-runner daemon --config /data/config.yml
+    # Só inicia depois do registro — o profile evita subir sem config.
+    profiles: [runner]
+
+volumes:
+  forgejo_data:
+  forgejo_pg:
+  runner_data:

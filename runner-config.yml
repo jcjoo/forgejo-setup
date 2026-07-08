@@ -1,0 +1,22 @@
+# Config do forgejo-runner (montada em /data/config.yml pelo compose).
+# Só o que difere do padrão (gere o padrão com: forgejo-runner generate-config).
+
+runner:
+  # Labels re-declarados a cada start — trocam os do registro sem re-registrar.
+  # pso-ci-node:22 (build em ./ci-image): node + docker CLI/buildx e /var/run
+  # real, contornando o "path escapes from parent" do Docker 29+.
+  labels:
+    - docker:docker://pso-ci-node:22
+    - ubuntu-latest:docker://pso-ci-node:22
+    - ubuntu-22.04:docker://pso-ci-node:22
+    - ubuntu-24.04:docker://pso-ci-node:22
+
+container:
+  # Jobs na rede do host: com a instância registrada como localhost:3300,
+  # checkout, busca de token do registry (feita pelo buildx DENTRO do job) e
+  # push pelo daemon enxergam o mesmo endereço. Com domínio real + HTTPS em
+  # produção, pode voltar a uma rede bridge.
+  network: host
+  # Monta o socket do docker do host nos jobs — necessário para workflows que
+  # buildam/públicam imagens (docker login/build/push rodam contra o daemon).
+  docker_host: automount
