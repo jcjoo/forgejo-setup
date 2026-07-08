@@ -52,13 +52,25 @@ services:
       timeout: 3s
       retries: 10
 
-  # Runner de CI: registre primeiro com ./setup-runner.sh (gera o token e a
-  # config). Sobe junto nas próximas vezes: docker compose up -d runner
+  # Imagem dos jobs do runner (node + docker CLI/buildx, ver ci-image/Dockerfile).
+  # Sem container de longa duração: builda, tageia como pso-ci-node:22 e sai —
+  # sobe junto com "docker compose up -d" (Portainer inclusive).
+  ci-image:
+    build: ./ci-image
+    image: pso-ci-node:22
+    command: ["true"]
+
+  # Runner de CI. Registra sozinho na primeira subida (runner-entrypoint.sh),
+  # usando RUNNER_REGISTRATION_TOKEN do .env — gere uma vez com:
+  #   docker compose exec -u 1000 forgejo forgejo actions generate-runner-token
+  # Depois disso, um "docker compose up -d" simples (ou deploy de stack no
+  # Portainer) já sobe tudo, sem passo manual extra.
   runner:
     image: code.forgejo.org/forgejo/runner:12
     restart: unless-stopped
     depends_on:
       - forgejo
+      - ci-image
     # Rede do host: o runner (e os jobs, via runner-config.yml) falam com o
     # Forgejo pelo mesmo localhost:3300 que o daemon docker usa no push das
     # imagens — registre a instância como http://localhost:3300.
@@ -66,15 +78,18 @@ services:
     user: "0:0"
     environment:
       DOCKER_HOST: unix:///var/run/docker.sock
+      FORGEJO_ROOT_URL: ${FORGEJO_ROOT_URL:-http://localhost:3300/}
+      RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN:-}
+      RUNNER_NAME: ${RUNNER_NAME:-pso-runner}
+      RUNNER_LABELS: 'docker:docker://pso-ci-node:22,ubuntu-latest:docker://pso-ci-node:22,ubuntu-22.04:docker://pso-ci-node:22,ubuntu-24.04:docker://pso-ci-node:22'
     volumes:
       - runner_data:/data
       - ./runner-config.yml:/data/config.yml:ro
+      - ./runner-entrypoint.sh:/entrypoint.sh:ro
       # Jobs em container usam o docker do host (mesmo padrão de runner do GitHub).
       - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /data
-    command: forgejo-runner daemon --config /data/config.yml
-    # Só inicia depois do registro — o profile evita subir sem config.
-    profiles: [runner]
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
 volumes:
   forgejo_data:

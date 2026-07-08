@@ -34,9 +34,20 @@ configura push mirror de volta para `github.com/psoengenhariaeletrica/<repo>`
 
 ## CI (Forgejo Actions)
 
+O runner se registra sozinho na primeira subida — não precisa de passo manual
+separado, funciona igual num `docker compose up -d` local ou num redeploy de
+stack no Portainer. Só precisa do token de registro no `.env` antes:
+
 ```bash
-./setup-runner.sh   # registra e sobe o runner
+docker compose up -d forgejo database   # se ainda não estiver no ar
+./setup-runner.sh                       # gera o token e grava em RUNNER_REGISTRATION_TOKEN no .env
+docker compose up -d                    # builda a ci-image, registra e sobe o runner
 ```
+
+(No Portainer: gere o token com o comando dentro de `setup-runner.sh` — ou
+pela UI, Administração → Actions → Runners → "Create new runner" só pra
+copiar o token — e cole em `RUNNER_REGISTRATION_TOKEN` nas variáveis do
+stack antes do deploy.)
 
 Os workflows são os mesmos arquivos de `.github/workflows/` — o Forgejo lê
 também `.forgejo/workflows/`. Actions `uses:` são baixadas do github.com
@@ -123,10 +134,13 @@ liberadas no firewall (a 3300 fica só interna, atrás do proxy).
    tela, depois a organização `pso` e o token de admin — mesmo fluxo do
    teste local (seção acima), só que já no domínio real.
 
-5. **Registrar o runner de CI no próprio servidor:**
+5. **Registrar o runner de CI no próprio servidor** (uma vez só — depois
+   disso, `docker compose up -d` sobe tudo, redeploy de stack no Portainer
+   incluso):
 
    ```bash
    ./setup-runner.sh
+   docker compose up -d
    ```
 
 6. **Migrar os repos do GitHub** (pode rodar do servidor ou de qualquer
