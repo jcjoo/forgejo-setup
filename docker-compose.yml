@@ -1,7 +1,8 @@
-# Forgejo self-hosted para a PSO — forge (git + issues/PRs + registry de
-# containers) + Postgres + runner de CI (Forgejo Actions).
-# Teste local: http://localhost:3300 · ssh na 2222 · registry no mesmo 3300.
-name: pso-forgejo
+# Forgejo da PSO — PRODUÇÃO, pronto para colar no Portainer.
+# Uma imagem do Forgejo + Postgres + runner de CI. Só imagens de registry
+# (nada de build nem bind-mount de arquivo): cola no Portainer, preenche as
+# variáveis e sobe. Ver README.md para o passo a passo.
+name: pso-forgejo-prod
 
 services:
   forgejo:
@@ -13,36 +14,41 @@ services:
     environment:
       USER_UID: "1000"
       USER_GID: "1000"
-      # Config via env (FORGEJO__seção__CHAVE) — sem editar app.ini na mão.
       FORGEJO__database__DB_TYPE: postgres
       FORGEJO__database__HOST: database:5432
       FORGEJO__database__NAME: ${POSTGRES_DB:-forgejo}
       FORGEJO__database__USER: ${POSTGRES_USER:-forgejo}
-      FORGEJO__database__PASSWD: ${POSTGRES_PASSWORD:-forgejo}
-      # URLs públicas (em produção troque pelo domínio/IP do servidor).
-      FORGEJO__server__ROOT_URL: ${FORGEJO_ROOT_URL:-http://localhost:3300/}
+      FORGEJO__database__PASSWD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      # URL pública (domínio real; https se atrás do nginx com TLS).
+      FORGEJO__server__ROOT_URL: ${FORGEJO_ROOT_URL:?defina FORGEJO_ROOT_URL}
+      FORGEJO__server__DOMAIN: ${FORGEJO_DOMAIN:?defina FORGEJO_DOMAIN}
+      FORGEJO__server__SSH_DOMAIN: ${FORGEJO_DOMAIN:?defina FORGEJO_DOMAIN}
       FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_PORT:-2222}
       FORGEJO__server__SSH_LISTEN_PORT: "22"
-      # CI (Forgejo Actions) — mesma sintaxe do GitHub Actions.
       FORGEJO__actions__ENABLED: "true"
-      # Fechado para a empresa: sem cadastro público.
       FORGEJO__service__DISABLE_REGISTRATION: "true"
-      # Espelhos push (backup off-site no GitHub) habilitados.
       FORGEJO__mirror__ENABLED: "true"
     ports:
-      - "${FORGEJO_HTTP_PORT:-3300}:3000"
+      - "${FORGEJO_HTTP_PORT:-3000}:3000"
       - "${FORGEJO_SSH_PORT:-2222}:22"
     volumes:
       - forgejo_data:/data
-      - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - forgejo_net
 
   database:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-forgejo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forgejo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-forgejo}
     volumes:
       - forgejo_pg:/var/lib/postgresql/data
@@ -51,35 +57,81 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    networks:
+      - forgejo_net
 
-  # Runner de CI: imagem única (runner + imagem de job, ver runner-image/
-  # Dockerfile), publicada em ghcr.io/jcjoo/pso-forgejo-runner. Registra
-  # sozinho na primeira subida (entrypoint embutido na imagem), usando
-  # RUNNER_REGISTRATION_TOKEN do .env — gere uma vez com:
-  #   docker compose exec -u 1000 forgejo forgejo actions generate-runner-token
-  # Depois disso, "docker compose up -d" (ou deploy de stack no Portainer) já
-  # sobe tudo, sem passo manual extra e sem build local.
+  # Runner de CI (imagem OFICIAL). O entrypoint faz tudo num serviço só:
+  # espera o Forgejo, registra na primeira vez (idempotente) e gera o
+  # config.yml no volume — sem bind-mount, sem imagem custom do runner.
+  #
+  # Token: pegue na UI em Admin > Actions > Runners > "Create new Runner",
+  # ponha em RUNNER_REGISTRATION_TOKEN e faça redeploy. Enquanto vazio, o
+  # runner fica reiniciando avisando disso (Forgejo e banco sobem normal).
+  #
+  # Registra pela URL INTERNA (http://forgejo:3000/) e põe os jobs na rede
+  # interna (forgejo_net) — checkout/API falam com o Forgejo sem sair pro
+  # nginx (evita hairpin NAT e erro de TLS).
   runner:
-    image: ghcr.io/jcjoo/pso-forgejo-runner:latest
+    image: code.forgejo.org/forgejo/runner:12
     restart: unless-stopped
     depends_on:
-      - forgejo
-    # Rede do host: o runner (e os jobs, via runner-config.yml) falam com o
-    # Forgejo pelo mesmo localhost:3300 que o daemon docker usa no push das
-    # imagens — registre a instância como http://localhost:3300.
-    network_mode: host
+      forgejo:
+        condition: service_healthy
     user: "0:0"
     environment:
       DOCKER_HOST: unix:///var/run/docker.sock
-      FORGEJO_ROOT_URL: ${FORGEJO_ROOT_URL:-http://localhost:3300/}
+      FORGEJO_ROOT_URL: ${RUNNER_INSTANCE_URL:-http://forgejo:3000/}
       RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN:-}
       RUNNER_NAME: ${RUNNER_NAME:-pso-runner}
-      RUNNER_LABELS: 'docker:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest,ubuntu-latest:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest,ubuntu-22.04:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest,ubuntu-24.04:docker://ghcr.io/jcjoo/pso-forgejo-runner:latest'
+      # Imagem de JOB (o que roda no runs-on:). Em Docker 29+ ela precisa ter
+      # o /var/run real; a do ghcr já tem. Vem de registry (paste-YAML não
+      # builda). Troque por outra imagem publicada se quiser.
+      CI_JOB_IMAGE: ${CI_JOB_IMAGE:-ghcr.io/jcjoo/pso-forgejo-runner:latest}
+    entrypoint:
+      - /bin/sh
+      - -euc
+      - |
+        # $$ escapa a interpolação do Compose (variáveis de shell).
+        L="docker:docker://$$CI_JOB_IMAGE,ubuntu-latest:docker://$$CI_JOB_IMAGE,ubuntu-22.04:docker://$$CI_JOB_IMAGE,ubuntu-24.04:docker://$$CI_JOB_IMAGE"
+        echo "Aguardando o Forgejo em $${FORGEJO_ROOT_URL}..."
+        until wget -q -O /dev/null "$${FORGEJO_ROOT_URL}api/healthz"; do sleep 2; done
+        if [ ! -f /data/.runner ]; then
+          if [ -z "$$RUNNER_REGISTRATION_TOKEN" ]; then
+            echo "RUNNER_REGISTRATION_TOKEN vazio — pegue em Admin > Actions > Runners e faça redeploy."
+            sleep 10
+            exit 1
+          fi
+          echo "Registrando runner..."
+          forgejo-runner register --no-interactive \
+            --instance "$$FORGEJO_ROOT_URL" \
+            --token "$$RUNNER_REGISTRATION_TOKEN" \
+            --name "$$RUNNER_NAME" \
+            --labels "$$L"
+        fi
+        # (re)gera o config a cada start: jobs na rede interna + socket do host.
+        {
+          echo "runner:"
+          echo "  labels:"
+          echo "    - docker:docker://$$CI_JOB_IMAGE"
+          echo "    - ubuntu-latest:docker://$$CI_JOB_IMAGE"
+          echo "    - ubuntu-22.04:docker://$$CI_JOB_IMAGE"
+          echo "    - ubuntu-24.04:docker://$$CI_JOB_IMAGE"
+          echo "container:"
+          echo "  network: forgejo_net"
+          echo "  docker_host: automount"
+        } > /data/config.yml
+        exec forgejo-runner daemon --config /data/config.yml
     volumes:
       - runner_data:/data
-      # Jobs em container usam o docker do host (mesmo padrão de runner do GitHub).
+      # Socket do docker do host — necessário para jobs que buildam/pusham.
       - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /data
+    networks:
+      - forgejo_net
+
+networks:
+  forgejo_net:
+    name: forgejo_net
 
 volumes:
   forgejo_data:
